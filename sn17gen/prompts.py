@@ -75,25 +75,3 @@ STRUCTURE_CHECK = ("Before changing anything, go over the photo part by part and
                    "rings, plump rolled arms) and make sure the model has that structure and not a simpler substitute.")
 FINAL_REFINE_USER = REFINE_USER.replace("Return the complete improved module",
                                         STRUCTURE_CHECK + "\nReturn the complete improved module", 1)
-
-
-# The judge's own Stage-1 wording (judge-service multi_stage.py), used for the final pick.
-JUDGE_SYSTEM = (
-    "You are a specialized 3D model evaluation system.\n"
-    "Analyze visual quality and prompt adherence with expert precision.\n"
-    "Always respond with valid JSON only."
-)
-JUDGE_USER = (
-    "You see two 3D models rendered from {angle_desc}.\n"
-    "The reference image shows the target object.\n\n"
-    "Which model is a more faithful 3D reproduction of the reference?\n\n"
-    "Penalty 0-10:\n"
-    "0 = Perfect match to reference\n"
-    "3 = Minor issues (slight shape differences, missing small details)\n"
-    "5 = Moderate issues (wrong style, significant details missing)\n"
-    "7 = Major issues (wrong category but related, e.g. chair vs stool)\n"
-    "10 = Completely wrong object\n\n"
-    'Output: {{"penalty_1": <0-10>, "penalty_2": <0-10>, "issues": "<brief>"}}'
-)
-JUDGE_VIEWS = ((30, 0, "slightly left of the front"), (330, 0, "slightly right of the front"),
-               (0, 15, "the front, from slightly below"), (0, -30, "the front, from slightly above"))
