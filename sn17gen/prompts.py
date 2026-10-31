@@ -66,26 +66,3 @@ Output JSON only: {"penalties": [<one number per candidate, in order>]}"""
 GEN_USER_ALT = ("Reference photo attached. Write the complete Three.js module for this object. Start from the proportions: "
                 "measure the width, height and depth of every major part relative to the whole object and write them as "
                 "named constants, then build every part from them. Output only the JavaScript.")
-
-
-
-# The judge's own Stage-1 wording (judge-service multi_stage.py), used for the final pick.
-JUDGE_SYSTEM = (
-    "You are a specialized 3D model evaluation system.\n"
-    "Analyze visual quality and prompt adherence with expert precision.\n"
-    "Always respond with valid JSON only."
-)
-JUDGE_USER = (
-    "You see two 3D models rendered from {angle_desc}.\n"
-    "The reference image shows the target object.\n\n"
-    "Which model is a more faithful 3D reproduction of the reference?\n\n"
-    "Penalty 0-10:\n"
-    "0 = Perfect match to reference\n"
-    "3 = Minor issues (slight shape differences, missing small details)\n"
-    "5 = Moderate issues (wrong style, significant details missing)\n"
-    "7 = Major issues (wrong category but related, e.g. chair vs stool)\n"
-    "10 = Completely wrong object\n\n"
-    'Output: {{"penalty_1": <0-10>, "penalty_2": <0-10>, "issues": "<brief>"}}'
-)
-JUDGE_VIEWS = ((30, 0, "slightly left of the front"), (330, 0, "slightly right of the front"),
-               (0, 15, "the front, from slightly below"), (0, -30, "the front, from slightly above"))

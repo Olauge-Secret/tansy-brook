@@ -35,9 +35,7 @@ CHAIN_CALLS = CALLS + REPAIRS + PROVIDER_RETRIES
 ID_BLOCK = 100
 FINAL_IDS = 900
 FINAL_REFINE_ID = 950
-PICK_EFFORT = "low"
-PICK_PX = 1024
-PICK_CALL_CREDITS = 40_000
+FINAL_REFINES = 2
 FINAL_REFINE_CREDITS = 600_000
 TOTAL_CREDITS = 4_600_000  # the frozen budget is 5,000,000 credits and 60 calls per prompt
 _CHARGE_LOCK = threading.Lock()
@@ -64,12 +62,11 @@ def _png(image: bytes) -> bytes:
 
 
 def _call(witness, ledger: Ledger, rid: int, kind: str, text: str, pngs: list[bytes], *, model: str | None = None,
-          effort: str | None = None, instructions: str | None = None, content: list | None = None) -> str | None:
+          effort: str | None = None, instructions: str | None = None) -> str | None:
     model, effort = model or MODEL, effort or EFFORT
     instructions = prompts.GEN_SYSTEM if instructions is None else instructions
-    if content is None:
-        content = [{"type": "input_text", "text": text}]
-        content += [{"type": "input_image", "image_url": views.data_url(p), "detail": "high"} for p in pngs]
+    content = [{"type": "input_text", "text": text}]
+    content += [{"type": "input_image", "image_url": views.data_url(p), "detail": "high"} for p in pngs]
     try:
         result = witness.responses.create(
             request_id=rid, model=model, instructions=instructions,
@@ -217,61 +214,16 @@ def _panel(witness, renderer, ref: bytes, modules: list[str]) -> str:
     return modules[min(range(n), key=lambda i: (total[i], i))]
 
 
-def _pair_penalties(text: str | None) -> tuple[float, float]:
-    m = re.search(r"\{.*\}", text or "", re.S)
-    try:
-        d = json.loads(m.group(0)) if m else {}
-        return float(d["penalty_1"]), float(d["penalty_2"])
-    except (ValueError, KeyError, TypeError):
-        return 5.0, 5.0  # the judge's own neutral fallback
-
-
-def _judge_pick(witness, renderer, ref: bytes, modules: list[str]) -> str:
-    """Pick like the judge's Stage 1: every pair of candidates, each front camera, both orders, the judge's own
-    wording; the candidate with the lowest summed penalty wins. Views are the submitted (final) modules."""
-    shots: dict[int, list[bytes]] = {}
-    for i, js in enumerate(modules):
-        try:
-            shots[i] = [renderer.render(final(js), views.view_options(t, p, PICK_PX)) for t, p, _ in prompts.JUDGE_VIEWS]
-        except Exception as exc:
-            if type(exc).__name__ != "RenderRejected":
-                raise
-    alive = sorted(shots)
-    if len(alive) < 2:
-        return modules[alive[0]] if alive else modules[0]
-    asks = [(x, y, v) for a in alive for b in alive if a < b for x, y in ((a, b), (b, a)) for v in range(len(prompts.JUDGE_VIEWS))]
-    ledger = Ledger(credit_cap=len(asks) * PICK_CALL_CREDITS + 1, call_cap=len(asks))
-
-    def job(k: int, x: int, y: int, v: int):
-        content = [{"type": "input_text", "text": "Reference image (target object):"},
-                   {"type": "input_image", "image_url": views.data_url(ref), "detail": "high"},
-                   {"type": "input_text", "text": "3D model 1:"},
-                   {"type": "input_image", "image_url": views.data_url(shots[x][v]), "detail": "high"},
-                   {"type": "input_text", "text": "3D model 2:"},
-                   {"type": "input_image", "image_url": views.data_url(shots[y][v]), "detail": "high"},
-                   {"type": "input_text", "text": prompts.JUDGE_USER.format(angle_desc=prompts.JUDGE_VIEWS[v][2])}]
-        return lambda: _call(witness, ledger, FINAL_IDS + k, "pick", "", [], effort=PICK_EFFORT,
-                             instructions=prompts.JUDGE_SYSTEM, content=content)
-
-    answers = _parallel([job(k, x, y, v) for k, (x, y, v) in enumerate(asks)])
-    pen = {i: 0.0 for i in alive}
-    for (x, y, _), text in zip(asks, answers):
-        p1, p2 = _pair_penalties(text)
-        pen[x] += p1
-        pen[y] += p2
-    return modules[min(alive, key=lambda i: (pen[i], i))]
-
-
-def _final_refine(witness, renderer, ref: bytes, best: str, sheet: bytes) -> str:
+def _final_refine(witness, renderer, ref: bytes, best: str, sheet: bytes, request_id: int) -> tuple[str, bytes]:
     """One more refinement of the picked module against the four camera views; kept only if it renders."""
     ledger = Ledger(credit_cap=FINAL_REFINE_CREDITS + 1, call_cap=1)
-    js = extract(_call(witness, ledger, FINAL_REFINE_ID, "final", prompts.REFINE_USER % best, [ref, sheet],
+    js = extract(_call(witness, ledger, request_id, "final", prompts.REFINE_USER % best, [ref, sheet],
                        effort=REFINE_EFFORT))
     wrapped = wrap(js) if js is not None else None
     if wrapped is None:
-        return best
-    _, err = _sheet_or_error(renderer, wrapped)
-    return best if err is not None else js
+        return best, sheet
+    new_sheet, err = _sheet_or_error(renderer, wrapped)
+    return (best, sheet) if err is not None else (js, new_sheet)
 
 
 def run(image: bytes, seed: int, witness, renderer) -> str | None:
@@ -290,16 +242,16 @@ def run(image: bytes, seed: int, witness, renderer) -> str | None:
             c.settle(renderer, kind)
     found = [c.best for c in chains if c.best is not None]
     spent = sum(c.ledger.credits for c in chains)
-    pick_cost = len(found) * (len(found) - 1) * len(prompts.JUDGE_VIEWS) * PICK_CALL_CREDITS
-    if len(found) > 1 and spent + pick_cost + FINAL_REFINE_CREDITS <= TOTAL_CREDITS:
-        best = _judge_pick(witness, renderer, ref, found)
-    elif len(found) > 1 and spent + 2 * EXPECTED_PANEL_CREDITS <= TOTAL_CREDITS:
+    if len(found) > 1 and spent + 2 * EXPECTED_PANEL_CREDITS <= TOTAL_CREDITS:
         best = _panel(witness, renderer, ref, found)
     else:
         best = found[0] if found else None
-    if best is not None and spent + 2 * EXPECTED_PANEL_CREDITS + FINAL_REFINE_CREDITS <= TOTAL_CREDITS:
+    if best is not None:
         sheet = next(c.best_sheet for c in chains if c.best is best)
-        best = _final_refine(witness, renderer, ref, best, sheet)
+        for k in range(FINAL_REFINES):
+            if spent + 2 * EXPECTED_PANEL_CREDITS + (k + 1) * FINAL_REFINE_CREDITS > TOTAL_CREDITS:
+                break
+            best, sheet = _final_refine(witness, renderer, ref, best, sheet, FINAL_REFINE_ID + k)
     out = final(best) if best is not None else None
     _trace(key, "final", out)
     if out is None:
